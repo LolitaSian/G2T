@@ -29,7 +29,6 @@ class WebNLGDataLoader(DataLoader):
                                                num_workers=args.num_workers)
 
 
-# WEBNLG数据集的DataSet
 class WebNLGDataset(Dataset):
     def __init__(self, logger, args, data_path, tokenizer):
         self.data_path = data_path
@@ -46,19 +45,14 @@ class WebNLGDataset(Dataset):
             for i in range(len(self.data)):
                 self.data[i]["id"] = str(self.data[i]["id"])
 
-        # 设置特殊关键字id
-
-        # 头，关系，尾等节点标识，
         self.head_ids, self.rel_ids, self.tail_ids = self.tokenizer.encode(' [head]', add_special_tokens=False), \
                                                      self.tokenizer.encode(' [relation]', add_special_tokens=False), \
                                                      self.tokenizer.encode(' [tail]', add_special_tokens=False)
         self.graph_ids, self.text_ids = self.tokenizer.encode(' [graph]', add_special_tokens=False), \
                                         self.tokenizer.encode(' [text]', add_special_tokens=False)
-        # 设置mask token以及对应id
         self.mask_token = self.tokenizer.mask_token
         self.mask_token_id = self.tokenizer.mask_token_id
 
-        # 设置额外begin of sentece id ,具体干啥的不知道
         if self.args.append_another_bos:
             self.add_bos_id = [self.tokenizer.bos_token_id] * 2
         else:
@@ -67,8 +61,6 @@ class WebNLGDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-    # 将所有关系实体，尾实体提取出来，并且如过尾实体里有头实体，那么将尾实体中对应实体删除
-    # 返回关系实体和尾实体列表，无序
     def get_all_entities_per_sample(self, mark_entity_number, mark_entity, entry):
         text_entity = set()
         text_relation = set()
@@ -89,9 +81,6 @@ class WebNLGDataset(Dataset):
 
         return text_entity_list, text_relation_list
 
-    # 将所有头尾实体与关系实体Encode
-    # 头尾实体返回的ent_change 是字典，key是这个词的token,value是数组，第一个位置是encode的id,第二个是在所有头尾实体中的id
-    # 关系实体rel_change也是字典，不过只有encode id
     def get_change_per_sample(self, mark_entity, text_entity, text_relation):
         # during fine-tuning, we don't mask entities or relations
         ent_change = {}
@@ -109,7 +98,6 @@ class WebNLGDataset(Dataset):
 
         return ent_change, rel_change
 
-    # 一个三元组线性化
     def linearize_v2(self, entity, entity_change, head_ids, rel_ids, tail_ids,
                      relation_change, cnt_edge, adj_matrix):
         # string_label: encoder ids
@@ -127,7 +115,6 @@ class WebNLGDataset(Dataset):
         string_label_tokens += ' {}'.format(entity[0])
         nodes.extend([entity_change[entity[0]][1]] * len(entity_change[entity[0]][0]))
         edges.extend([-1] * len(entity_change[entity[0]][0]))
-        # nodes 非实体位置对应-1， 实体单词的每个位置对应total_entity里面的id,关系实体处的代词也对应-1
 
         for rel in entity[2]:
             if len(rel[0]) != 0 and len(rel[1]) != 0:
@@ -140,9 +127,6 @@ class WebNLGDataset(Dataset):
                         entity_change[rel[1]][0]))
                 edges.extend([-1] * len(rel_ids) + [cnt_edge] * len(rel_label) + [-1] * (
                         len(tail_ids) + len(entity_change[rel[1]][0])))
-                # 但是edges里面只有关系实体对应的单词位置使用cnt_edge标记，且该变量会递增
-
-                # 邻接矩阵表示连接处也使用cnt_edge标记
                 if entity_change[entity[0]][1] < len(adj_matrix) and entity_change[rel[1]][1] < len(adj_matrix):
                     adj_matrix[entity_change[entity[0]][1]][entity_change[rel[1]][1]] = cnt_edge
 
@@ -155,10 +139,7 @@ class WebNLGDataset(Dataset):
         return string_label, string_label_tokens, nodes, edges, cnt_edge, adj_matrix
 
     def truncate_pair_ar(self, a, add_bos_id, graph_ids, text_ids, node_ids, edge_ids):
-        # 处理输入数据， a就是要从encoder数据进去的
-        # add_bos_id + graph_ids + a + text_ids + b + eos_token_id
         length_a_b = self.args.max_input_length - len(add_bos_id) - len(graph_ids) - len(text_ids) - 1
-        # 如果strings_label超长了阶段
         if len(a) > length_a_b:
             a = a[:length_a_b]
             node_ids = node_ids[:length_a_b]
@@ -166,12 +147,10 @@ class WebNLGDataset(Dataset):
         input_ids = add_bos_id + graph_ids + a + text_ids + [self.tokenizer.eos_token_id]
         input_node_ids = [-1] * (len(add_bos_id) + len(graph_ids)) + node_ids + [-1] * (len(text_ids) + 1)
         input_edge_ids = [-1] * (len(add_bos_id) + len(graph_ids)) + edge_ids + [-1] * (len(text_ids) + 1)
-        # mask用0补长
         attn_mask = [1] * len(input_ids) + [0] * (self.args.max_input_length - len(input_ids))
-        # inputid 加pad
+
         input_ids += [self.tokenizer.pad_token_id] * (self.args.max_input_length - len(input_ids))
 
-        # 节点和边用-1在后面补长
         input_node_ids += [-1] * (self.args.max_input_length - len(input_node_ids))
         input_edge_ids += [-1] * (self.args.max_input_length - len(input_edge_ids))
         assert len(input_ids) == len(attn_mask) == self.args.max_input_length == len(input_node_ids) == len(
@@ -181,15 +160,12 @@ class WebNLGDataset(Dataset):
     def ar_prep_data(self, answers, questions, add_bos_id, graph_ids, text_ids, node_ids, edge_ids):
         # add bos and eos
         decoder_label_ids = copy.deepcopy(answers)
-        # 如果decoder 的输入多余设置的最大输出长度则剪裁多余部分
+
         if len(decoder_label_ids) > self.args.max_output_length - len(add_bos_id) - 1:
             decoder_label_ids = decoder_label_ids[:(self.args.max_output_length - len(add_bos_id) - 1)]
 
-        # 加上开始和结束的特殊表示
         decoder_label_ids = add_bos_id + decoder_label_ids + [self.tokenizer.eos_token_id]
-        # 用1表示真正的输入位置，用0补充到后面的长度
         decoder_attn_mask = [1] * len(decoder_label_ids) + [0] * (self.args.max_output_length - len(decoder_label_ids))
-        # decoder输入不够设置长度的位置使用<pad>补充
         decoder_label_ids += [self.tokenizer.pad_token_id] * (self.args.max_output_length - len(decoder_label_ids))
         assert len(decoder_label_ids) == self.args.max_output_length == len(decoder_attn_mask)
 
@@ -207,20 +183,15 @@ class WebNLGDataset(Dataset):
         # 将多个三元组放进entities里
         for _ in obj['kbs']:
             entities.append(_)
-        # 线性化句子的id列表
         strings_label = []
-        # 线性化句子的token拼接
         strings_label_tokens = ''
         node_ids = []
         edge_ids = []
         cnt_edge = 0
-        # mark_entity是头实体列表，text_relation是关系实体列表，text_entity是尾实体列表
-        # 只有mark_entity是顺序的其他全部打乱
         mark_entity = [obj['kbs'][ele_entity][0] for ele_entity in entities]
         mark_entity_number = entities
         text_entity, text_relation = self.get_all_entities_per_sample(mark_entity_number, mark_entity, obj)
         entity_change, relation_change = self.get_change_per_sample(mark_entity, text_entity, text_relation)
-        # 邻接矩阵设置成（max_node_length + 1） * （max_node_length + 1） 的矩阵，且设置值为-1
         adj_matrix = [[-1] * (self.args.max_node_length + 1) for _ in range(self.args.max_node_length + 1)]
         for i, entity_id in enumerate(entities):
             entity = obj['kbs'][entity_id]
@@ -230,22 +201,17 @@ class WebNLGDataset(Dataset):
                 self.head_ids,
                 self.rel_ids, self.tail_ids,
                 relation_change, cnt_edge, adj_matrix)
-            # 将单个三元组拼接到总的里面
             strings_label += string_label
             strings_label_tokens += string_label_tokens
             node_ids += nodes
             edge_ids += edges
         words_label_ids, words_label_tokens = [], ''
-        # 随机抽取一个，反正都是训练，我直接改成第一个得了
         current_text = random.choice(obj['text'])
-        # current_text = obj['text'][0]
-        # 编码目标文本
         for word in current_text.split():
             word_label_ids = self.tokenizer.encode(" {}".format(word), add_special_tokens=False)
             word_label_tokens = copy.deepcopy(word)
             words_label_ids += word_label_ids
             words_label_tokens += ' ' + word_label_tokens
-        # 初步得到需要的东西
         input_ids_ar, attn_mask_ar, decoder_label_ids, decoder_attn_mask, input_node_ids_ar, input_edge_ids_ar = \
             self.ar_prep_data(words_label_ids, strings_label, self.add_bos_id, self.graph_ids,
                               self.text_ids, node_ids, edge_ids)
